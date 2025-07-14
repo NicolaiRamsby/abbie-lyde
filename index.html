@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="da">
+<head>
+  <meta charset="UTF-8">
+  <title>Abbie lyde</title>
+  <script src="https://unpkg.com/vue@3"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+  <!-- Gør siden til en "web app" -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="Mit Appnavn">
+
+    <!-- App-ikon -->
+    <link rel="apple-touch-icon" href="/icon.png">
+</head>
+<body class="bg-gray-50 min-h-screen flex items-center text-sm">
+  <div id="app" class="w-full mx-auto p-6 text-center">
+    <h1 class="text-2xl font-bold mb-6">Abbie lyde</h1>
+    <div class="flex flex-col gap-4">
+        <button v-for="message in messages" :class="`${message.classes} py-2 px-4 rounded`" @click="sendPushover(message)">
+            {{ message.title }}
+        </button>
+    </div>
+    <p class="mt-6 text-gray-700">Status: <strong>{{ status }}</strong></p>
+  </div>
+
+  <script>
+    const { createApp } = Vue;
+  
+    createApp({
+      data() {
+        return {
+          status: 'Ikke sendt endnu',
+          messages: [
+            {
+                title: 'Test',
+                classes: 'bg-gray-300 text-black',
+                sounds: ['test-lyd'],
+            },
+            {
+                title: 'Nej',
+                classes: 'bg-red-500 text-white',
+                sounds: ['nej', 'nej_1', 'nej_2', 'nej_3', 'nej_4', 'nej_5'],
+            },
+            {
+                title: 'Dygtig',
+                classes: 'bg-green-500 text-white',
+                sounds: ['dygtig'],
+            },
+          ],
+        };
+      },
+      methods: {
+        async sendPushover(message) {
+          this.status = 'Sender...';
+  
+          const randomSound = message.sounds[Math.floor(Math.random() * message.sounds.length)];
+  
+          try {
+            const response = await axios.post('https://api.pushover.net/1/messages.json', new URLSearchParams({
+              token: 'a38f1kk42aa9z74cmn1v4oqkg869pt',
+              user: 'uzrzczdvw6vjcq9hkxhkzjkkag3vuj',
+              message: message.title,
+              sound: randomSound,
+            }));
+  
+            this.status = `Sendt med lyd: ${randomSound}`;
+            console.log('Response:', response.data);
+          } catch (error) {
+            console.error('Fejl:', error);
+            this.status = 'Fejl ved afsendelse';
+          }
+        }
+      }
+    }).mount('#app');
+  </script>
+  </body>
+  </html>
