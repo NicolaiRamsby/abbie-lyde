@@ -20,7 +20,7 @@
   <div id="app" class="w-full mx-auto p-6 text-center">
     <h1 class="text-2xl font-bold mb-6">Abbie lyde</h1>
     <div class="flex flex-col gap-4">
-        <button v-for="message in messages" :class="`${message.classes} py-2 px-4 rounded`" @click="sendPushover(message)">
+        <button v-for="message in messages" :class="`${message.classes} py-6 px-4 rounded`" @click="sendPushover(message)">
             {{ message.title }}
         </button>
     </div>
