@@ -1,0 +1,24 @@
+# One shared code, checked by the monitor and exchanged for a cookie. Basic
+# auth cannot be used: go2rtc's player is an ES module, and module fetches do
+# not carry Basic credentials, so the player never loads. Cookies do.
+:8080 {
+	# The login page and the auth check must stay reachable without a cookie.
+	@open path /login /auth /icon.png /icon-512.png /manifest.json
+	handle @open {
+		reverse_proxy 127.0.0.1:8099
+	}
+
+	handle {
+		forward_auth 127.0.0.1:8099 {
+			uri /auth
+		}
+
+		@monitor path / /index.html /config /state /events /pause /trigger /history /days /monitoring /zones
+		handle @monitor {
+			reverse_proxy 127.0.0.1:8099
+		}
+		handle {
+			reverse_proxy 127.0.0.1:1984
+		}
+	}
+}

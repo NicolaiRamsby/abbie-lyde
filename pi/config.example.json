@@ -1,0 +1,97 @@
+{
+  "go2rtc": "auto",
+  "rtsp_transport": "tcp",
+  "fps": 5,
+  "cameras": [
+    {
+      "name": "Under skrivebord",
+      "src": "c500pro",
+      "stream": "rtsp://127.0.0.1:8554/c500pro_det",
+      "zones": [
+        {
+          "name": "kurv 1",
+          "rect": [
+            0.2932,
+            0.5448,
+            0.3032,
+            0.3083
+          ],
+          "sound": "dygtig",
+          "threshold_pct": 4.0,
+          "consecutive": 2,
+          "delay": 3.5,
+          "cooldown": 0
+        }
+      ]
+    },
+    {
+      "name": "Under kaffebar",
+      "src": "mi360",
+      "stream": "rtsp://127.0.0.1:8554/mi360_det",
+      "zones": [
+        {
+          "name": "kurv 2",
+          "rect": [
+            0.2479,
+            0.7393,
+            0.4611,
+            0.2607
+          ],
+          "sound": "dygtig",
+          "threshold_pct": 4.0,
+          "consecutive": 2,
+          "delay": 3.5,
+          "cooldown": 0
+        },
+        {
+          "name": "gitter",
+          "rect": [
+            0.7435,
+            0.18,
+            0.2115,
+            0.5049
+          ],
+          "sound": "nej",
+          "threshold_pct": 3.0,
+          "consecutive": 2,
+          "delay": 0,
+          "cooldown": 10
+        }
+      ]
+    }
+  ],
+  "sounds": {
+    "nej": {
+      "message": "Nej",
+      "pushover_sounds": [
+        "nej",
+        "nej_1",
+        "nej_2",
+        "nej_3",
+        "nej_4",
+        "nej_5"
+      ]
+    },
+    "dygtig": {
+      "message": "Dygtig",
+      "pushover_sounds": [
+        "dygtig"
+      ]
+    },
+    "test": {
+      "message": "Test",
+      "pushover_sounds": [
+        "test-lyd"
+      ]
+    }
+  },
+  "pushover": {
+    "token": "SÆT-DIN-EGEN",
+    "user": "SÆT-DIN-EGEN",
+    "device": "ipad6gwifi"
+  },
+  "keep_days": 90,
+  "sequence": {
+    "dygtig": "nej"
+  }
+}

@@ -1,0 +1,6 @@
+# Never commit the real ones: Pushover keys, the access code hash, runtime state
+config.json
+go2rtc.yaml
+auth.json
+pause.json
+log/

@@ -1,0 +1,20 @@
+api:
+  listen: ":1984"
+
+log:
+  level: info
+
+streams:
+  # Full resolution, used for viewing in the monitor page.
+  c500pro: xiaomi://1818918895:de@192.168.86.136?did=1109918260&model=chuangmi.camera.061a03
+  mi360: xiaomi://1818918895:de@192.168.86.145?did=1034266813&model=chuangmi.camera.021a04
+
+  # 848x480 substreams, used for detection. Roughly a seventh of the decode
+  # cost of the full stream, and we downscale to 320x180 to diff anyway.
+  c500pro_det: xiaomi://1818918895:de@192.168.86.136?did=1109918260&model=chuangmi.camera.061a03&subtype=sd
+  mi360_det: xiaomi://1818918895:de@192.168.86.145?did=1034266813&model=chuangmi.camera.021a04&subtype=sd
+
+# The xiaomi account token is appended here on first deploy, or created by
+# logging in at http://<pi>:1984/add.html -> Xiaomi.
+xiaomi:
+  "1818918895": <xiaomi-token, hentes via go2rtc WebUI>

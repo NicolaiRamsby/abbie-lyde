@@ -1,0 +1,9 @@
+tunnel: TUNNEL-ID
+credentials-file: /etc/cloudflared/TUNNEL-ID.json
+
+ingress:
+  # Everything goes to Caddy, which requires the password and then routes
+  # between the monitor and go2rtc.
+  - hostname: abbie.deveo.dk
+    service: http://127.0.0.1:8080
+  - service: http_status:404

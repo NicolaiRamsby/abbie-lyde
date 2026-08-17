@@ -1,0 +1,960 @@
+<!doctype html>
+<html lang="da">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Abbie</title>
+<meta name="theme-color" content="#0f1115">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Abbie">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="apple-touch-icon" href="/icon.png">
+<link rel="icon" href="/icon.png">
+<link rel="manifest" href="/manifest.json">
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --line: #262b36;
+    --text: #e6e9ef;
+    --muted: #8b93a3;
+    --nej: #ff6b5e;
+    --dygtig: #4ade80;
+    --idle: #5b6470;
+  }
+  * { box-sizing: border-box; }
+  /* Any display rule of our own outranks the browser's [hidden] style, so
+     hidden has to be made to win explicitly. */
+  [hidden] { display: none !important; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.5 ui-sans-serif, -apple-system, "Segoe UI", sans-serif;
+  }
+  header {
+    display: flex; align-items: baseline; gap: 16px;
+    padding: 14px 20px; border-bottom: 1px solid var(--line);
+    padding-top: calc(14px + env(safe-area-inset-top));
+  }
+  header h1 {
+    font-size: 16px; margin: 0; font-weight: 600;
+    cursor: pointer; user-select: none;
+  }
+  header h1:active { opacity: .6; }
+  header .mode {
+    font-size: 12px; padding: 3px 9px; border-radius: 999px;
+    background: #2a2f3a; color: var(--muted);
+  }
+  header .conn { margin-left: auto; font-size: 12px; color: var(--muted); }
+  .controls {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 10px 20px; border-bottom: 1px solid var(--line);
+    background: var(--panel);
+  }
+  .controls .manual { margin-left: auto; }
+  header .conn.up::before { content: "● "; color: var(--dygtig); }
+  header .conn.down::before { content: "● "; color: var(--nej); }
+
+  main { display: grid; grid-template-columns: 1fr 380px; gap: 16px; padding: 16px; }
+  @media (max-width: 1100px) { main { grid-template-columns: 1fr; } }
+
+  .cams { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 760px) { .cams { grid-template-columns: 1fr; } }
+
+  .cam {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; overflow: hidden;
+  }
+  .cam h2 {
+    font-size: 13px; font-weight: 600; margin: 0;
+    padding: 9px 12px; border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .cam h2 .dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: #39404e; transition: background .15s;
+  }
+  .cam h2 .dot.hot { background: var(--nej); }
+  .stage { position: relative; aspect-ratio: 16 / 9; background: #000; }
+  .stage iframe { width: 100%; height: 100%; border: 0; display: block; }
+
+  .zone {
+    position: absolute; border: 2px solid rgba(255,255,255,.35);
+    border-radius: 4px; pointer-events: none;
+    transition: border-color .12s, background .12s;
+  }
+  .zone.hot { background: rgba(255,107,94,.18); }
+  .zone[data-sound="nej"] { border-color: rgba(255,107,94,.75); }
+  .zone[data-sound="dygtig"] { border-color: rgba(74,222,128,.7); }
+  .zone[data-sound="dygtig"].hot { background: rgba(74,222,128,.18); }
+  .chip.save { background: var(--dygtig); color: #06240f; border-color: transparent; font-weight: 600; }
+  /* Zones are decoration until edit mode turns them into handles. */
+  body.editing .zone { pointer-events: auto; cursor: move; border-style: dashed; }
+  body.editing .stage iframe { pointer-events: none; }
+  .handle {
+    position: absolute; width: 18px; height: 18px; border-radius: 50%;
+    background: #fff; border: 2px solid #0f1115; display: none;
+    touch-action: none;
+  }
+  body.editing .handle { display: block; }
+  .handle.nw { left: -9px; top: -9px; cursor: nwse-resize; }
+  .handle.ne { right: -9px; top: -9px; cursor: nesw-resize; }
+  .handle.sw { left: -9px; bottom: -9px; cursor: nesw-resize; }
+  .handle.se { right: -9px; bottom: -9px; cursor: nwse-resize; }
+  .zone span {
+    position: absolute; top: 0; left: 0; transform: translateY(-100%);
+    font-size: 10px; letter-spacing: .04em; text-transform: uppercase;
+    padding: 1px 5px; background: rgba(0,0,0,.65); border-radius: 3px 3px 0 0;
+    color: #fff; white-space: nowrap;
+  }
+
+  .side { display: flex; flex-direction: column; gap: 16px; min-height: 0; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  }
+  .card h2 {
+    font-size: 13px; font-weight: 600; margin: 0;
+    padding: 9px 12px; border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .card h2 select {
+    background: #22262f; border: 1px solid var(--line); color: var(--text);
+    font: inherit; font-size: 12px; padding: 3px 8px; border-radius: 6px;
+    cursor: pointer;
+  }
+  .card h2 select:hover { border-color: #454d5e; }
+  .log-tools { display: flex; align-items: center; gap: 8px; }
+  .toggle {
+    background: #22262f; border: 1px solid var(--line); color: var(--muted);
+    font: inherit; font-size: 11px; padding: 3px 9px; border-radius: 999px;
+    cursor: pointer; white-space: nowrap;
+  }
+  .toggle:hover { border-color: #454d5e; color: var(--text); }
+  .toggle[aria-pressed="true"] {
+    background: rgba(74,222,128,.14); color: var(--dygtig);
+    border-color: rgba(74,222,128,.35);
+  }
+  /* Hiding rather than skipping keeps the toggle instant: the rows are
+     already built, so flipping it does not re-fetch the day. */
+  /* Blocked rows say what did not happen, which is the same noise as
+     the raw detections. Hidden together, only played sounds remain. */
+  #log.hide-detects .row.detect,
+  #log.hide-detects .row.blocked { display: none; }
+
+  .card h2 .day { font-weight: 400; color: var(--muted); font-size: 11px; }
+  .counts { display: grid; grid-template-columns: repeat(3, 1fr); }
+  .counts > div { padding: 12px 8px; text-align: center; border-right: 1px solid var(--line); }
+  .counts > div:last-child { border-right: 0; }
+  .counts .n { font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.2; }
+  .counts .n.nej { color: var(--nej); }
+  .counts .n.dygtig { color: var(--dygtig); }
+  .counts .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  .counts .t { font-size: 12px; color: var(--muted); margin-top: 4px; font-variant-numeric: tabular-nums; }
+
+  .soundctl { position: relative; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: #22262f; border: 1px solid var(--line); color: var(--text);
+    font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 999px;
+    cursor: pointer; white-space: nowrap;
+  }
+  .chip:hover { border-color: #454d5e; }
+  .chip .dot {
+    width: 7px; height: 7px; border-radius: 50%; background: var(--dygtig);
+  }
+  #sound-label-short { display: none; }
+  .chip.paused { border-color: rgba(255,107,94,.5); color: var(--nej); }
+  .chip.paused .dot { background: var(--nej); }
+  .chip.watch[aria-pressed="false"] {
+    border-color: #3a4150; color: var(--muted); background: #1b1f27;
+  }
+  .chip.watch[aria-pressed="false"] .dot { background: var(--idle); }
+  /* With the master switch off the sound controls are meaningless, so they
+     are dimmed rather than removed: the state stays visible. */
+  .soundctl.disabled { opacity: .4; pointer-events: none; }
+  .menu {
+    position: absolute; top: calc(100% + 6px); left: 0; z-index: 20;
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 9px; padding: 4px; min-width: 210px;
+    box-shadow: 0 10px 30px rgba(0,0,0,.5);
+  }
+  .menu button {
+    display: block; width: 100%; text-align: left;
+    background: none; border: 0; color: var(--text);
+    font: inherit; font-size: 13px; padding: 8px 10px; border-radius: 6px;
+    cursor: pointer;
+  }
+  .menu button:hover { background: #22262f; }
+  .menu button.resume { color: var(--dygtig); font-weight: 600; }
+  .menu button:disabled { opacity: .45; cursor: default; }
+
+  .manual { display: flex; gap: 8px; }
+  .manual button {
+    font: inherit; font-size: 12px; font-weight: 600; padding: 5px 12px;
+    border-radius: 999px; cursor: pointer; border: 1px solid transparent;
+    white-space: nowrap;
+  }
+  .manual .test { background: #22262f; color: var(--muted);
+                  border-color: var(--line); }
+  .manual .nej { background: rgba(255,107,94,.14); color: var(--nej);
+                 border-color: rgba(255,107,94,.35); }
+  .manual .dygtig { background: rgba(74,222,128,.14); color: var(--dygtig);
+                    border-color: rgba(74,222,128,.35); }
+  .manual button:hover { filter: brightness(1.25); }
+  .manual button:disabled { opacity: .45; cursor: default; }
+
+  #log { max-height: 60vh; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+
+  @media (max-width: 760px) {
+    header { padding: 9px 14px; gap: 10px;
+             padding-top: calc(9px + env(safe-area-inset-top)); }
+    main { padding: 10px; gap: 10px; padding-bottom: 8px; }
+    .cams { gap: 8px; }
+    .cam h2 { padding: 7px 10px; font-size: 12px; }
+    #log { max-height: 40vh; }
+    .counts .n { font-size: 20px; }
+
+    /* Same place as on desktop, directly under the header. Six controls do
+       not fit across a phone, so rather than squeezing the labels until they
+       are unreadable, the bar scrolls sideways. */
+    .controls {
+      padding: 9px 12px; gap: 8px; flex-wrap: nowrap;
+      overflow-x: auto;
+      scrollbar-width: none;
+      -webkit-overflow-scrolling: touch;
+    }
+    .controls::-webkit-scrollbar { display: none; }
+    .controls > * { flex: 0 0 auto; }
+    .controls .manual { margin-left: 0; flex: 0 0 auto; }
+    .controls .manual button { flex: 0 0 auto; padding: 9px 14px; font-size: 13px; }
+    .controls .manual .test { order: 3; }
+    .chip { padding: 8px 12px; font-size: 13px; }
+    #sound-label { display: none; }
+    #sound-label-short { display: inline; }
+    /* Fixed, not absolute: an absolutely positioned menu would be clipped by
+       the scrolling bar it hangs from. The exact top is set when it opens. */
+    .menu { position: fixed; left: 12px; right: 12px; bottom: auto; min-width: 0; }
+    .menu button { padding: 12px; font-size: 14px; }
+  }
+
+  @media (max-width: 420px) {
+    .controls { gap: 7px; padding-left: 10px; padding-right: 10px; }
+  }
+  .row {
+    display: grid; grid-template-columns: 62px 1fr auto;
+    gap: 10px; align-items: baseline;
+    padding: 8px 12px; border-bottom: 1px solid var(--line);
+    font-size: 13px;
+  }
+  .row:last-child { border-bottom: 0; }
+  .row time { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12px; }
+  .row .what strong { font-weight: 600; }
+  .row .pct { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12px; }
+  .row .note { color: var(--muted); font-size: 12px; display: block; }
+  .row.trigger, .row.manual { background: rgba(255,255,255,.03); }
+  /* Colour follows the sound, not the row type, so a test does not borrow
+     the colour of a telling-off. */
+  .row[data-sound="nej"] .what strong { color: var(--nej); }
+  .row[data-sound="dygtig"] .what strong { color: var(--dygtig); }
+  .row.blocked { opacity: .6; }
+  .row.blocked .what strong { color: var(--muted); }
+  .row.detect .what strong { color: var(--text); }
+  .row.suppressed { opacity: .5; }
+  .row.status .what { color: var(--muted); font-style: italic; }
+  .empty { padding: 22px 12px; color: var(--muted); text-align: center; font-size: 13px; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="reload" title="Tryk for at genindlæse">Abbie</h1>
+  <span class="mode" id="mode">indlæser</span>
+
+  <span class="conn down" id="conn">forbinder</span>
+</header>
+
+<div class="controls" id="controls">
+  <button class="chip watch" id="watch-btn" aria-pressed="true">
+    <span class="dot"></span><span id="watch-label">Aktiv</span>
+  </button>
+
+  <div class="soundctl" id="soundctl">
+    <button class="chip" id="sound-btn" aria-haspopup="true" aria-expanded="false">
+      <span class="dot" id="sound-dot"></span><span id="sound-label">Lyd aktiv</span><span id="sound-label-short">Lyd</span>
+    </button>
+    <div class="menu" id="sound-menu" hidden>
+      <button data-min="15">Pause 15 min</button>
+      <button data-min="60">Pause 1 time</button>
+      <button data-min="rest">Pause resten af dagen</button>
+      <button data-min="0">Pause indtil videre</button>
+      <button id="resume" class="resume" hidden>Slå lyd til igen</button>
+    </div>
+  </div>
+
+  <button class="chip" id="edit-btn" aria-pressed="false">Rediger zoner</button>
+  <button class="chip save" id="save-zones" hidden>Gem zoner</button>
+  <button class="chip" id="cancel-zones" hidden>Fortryd</button>
+
+  <div class="manual">
+    <button data-sound="test" class="say test">Test</button>
+    <button data-sound="nej" class="say nej">Sig "nej"</button>
+    <button data-sound="dygtig" class="say dygtig">Sig "dygtig"</button>
+  </div>
+</div>
+
+<main>
+  <div class="cams" id="cams"></div>
+
+  <div class="side">
+    <div class="card">
+      <h2>I dag <span class="day" id="day"></span></h2>
+      <div class="counts">
+        <div>
+          <div class="n nej" id="c-nej">0</div><div class="k">nej</div>
+          <div class="t" id="t-nej">aldrig</div>
+        </div>
+        <div>
+          <div class="n dygtig" id="c-dygtig">0</div><div class="k">dygtig</div>
+          <div class="t" id="t-dygtig">aldrig</div>
+        </div>
+        <div>
+          <div class="n" id="c-detect">0</div><div class="k">registreringer</div>
+          <div class="t">i alt</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>
+        Log
+        <span class="log-tools">
+          <button id="toggle-detects" class="toggle" aria-pressed="false">Vis detaljer</button>
+          <select id="day-picker" title="Vælg dag"></select>
+        </span>
+      </h2>
+      <div id="log"><div class="empty">Ingen registreringer endnu</div></div>
+    </div>
+  </div>
+</main>
+
+<script>
+const LABELS = {
+  detect: "registreret bevægelse",
+  pending: "afventer",
+  trigger: "ville afspille",
+  blocked: "blokeret",
+  status: "",
+  pause: "",
+};
+const zoneEls = new Map();
+
+const fmtDate = iso => iso ? `${iso.slice(8,10)}-${iso.slice(5,7)}-${iso.slice(0,4)}` : "";
+
+function fmtLast(iso) {
+  if (!iso) return "aldrig";
+  const d = new Date(iso), now = new Date(), time = iso.slice(11, 16);
+  if (d.toDateString() === now.toDateString()) {
+    const mins = Math.floor((now - d) / 60000);
+    if (mins < 1) return "lige nu";
+    if (mins < 60) return `for ${mins} min siden`;
+    return `kl. ${time}`;
+  }
+  const y = new Date(now);
+  y.setDate(now.getDate() - 1);
+  if (d.toDateString() === y.toDateString()) return `i går ${time}`;
+  return `${fmtDate(iso)} ${time}`;
+}
+
+// The counters live on the server so they survive a reload and mean "today"
+// rather than "whatever is left in the event backlog".
+async function refreshState() {
+  try {
+    const s = await (await fetch("/state", { cache: "no-store" })).json();
+    const set = (id, v) => document.getElementById(id).textContent = v;
+    set("day", fmtDate(s.day));
+    set("c-nej", s.counts?.nej ?? 0);
+    set("c-dygtig", s.counts?.dygtig ?? 0);
+    set("c-detect", s.detections ?? 0);
+    set("t-nej", fmtLast(s.last?.nej));
+    set("t-dygtig", fmtLast(s.last?.dygtig));
+    renderPause(s.pause);
+  } catch (e) {
+    // transient; the next event or the interval below picks it up
+  }
+}
+
+let stateTimer = null;
+function scheduleState() {
+  clearTimeout(stateTimer);
+  stateTimer = setTimeout(refreshState, 200);
+}
+
+let pauseState = null;
+
+function renderMonitoring(p) {
+  if (!p) return;
+  const on = p.monitoring !== false;
+  const btn = document.getElementById("watch-btn");
+  btn.setAttribute("aria-pressed", String(on));
+  document.getElementById("watch-label").textContent = on ? "Aktiv" : "Inaktiv";
+  btn.title = on
+    ? "Zoner aflæses, lyde kan afspilles"
+    : "Intet aflæses og intet logges. Kameraerne vises stadig";
+  document.getElementById("soundctl").classList.toggle("disabled", !on);
+}
+
+async function setMonitoring(active) {
+  const btn = document.getElementById("watch-btn");
+  btn.disabled = true;
+  try {
+    const r = await fetch("/monitoring", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ active }),
+    });
+    renderMonitoring(await r.json());
+  } catch (e) {
+    alert("Kunne ikke ændre overvågningen. Er Pi'en online?");
+  } finally {
+    btn.disabled = false;
+    refreshState();
+  }
+}
+
+// iOS freezes a backgrounded web app: the event stream dies and the video
+// stops, but nothing tells the page. Coming back to the foreground has to
+// re-establish everything, or you are looking at a still frame from an hour
+// ago without knowing it.
+function reloadStreams() {
+  for (const f of document.querySelectorAll(".stage iframe")) {
+    const src = f.src;
+    f.src = "about:blank";
+    f.src = src;
+  }
+}
+
+let hiddenSince = null;
+let resumeTimer = null;
+
+function onResume() {
+  clearTimeout(resumeTimer);
+  resumeTimer = setTimeout(() => {
+    if (!events || events.readyState === EventSource.CLOSED) connect();
+    refreshState();
+    loadDay(shownDay || todayStr());
+    // A quick tab switch does not need the players torn down; a real
+    // suspension does.
+    if (hiddenSince === null || Date.now() - hiddenSince > 5000) {
+      reloadStreams();
+      setTimeout(catchUpToLive, 4000);
+    }
+    hiddenSince = null;
+  }, 100);
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") hiddenSince = Date.now();
+  else onResume();
+});
+// Safari restores from its back/forward cache without firing visibilitychange.
+window.addEventListener("pageshow", ev => { if (ev.persisted) onResume(); });
+
+document.getElementById("reload").addEventListener("click", () => {
+  if (!editing) location.reload();
+});
+
+// ---- Zone editor -------------------------------------------------------
+// Drag the box to move it, drag a corner to resize. Everything is kept in
+// percentages of the video, which is exactly the 0-1 rect the detector wants,
+// so nothing is lost in translation.
+let editing = false;
+let originalRects = null;
+
+const pct = v => Math.max(0, Math.min(100, v));
+
+function zoneBoxes() {
+  return [...document.querySelectorAll(".zone")];
+}
+
+function readRects() {
+  return zoneBoxes().map(b => ({
+    camera: b.dataset.camera,
+    name: b.dataset.zone,
+    rect: [
+      parseFloat(b.style.left) / 100,
+      parseFloat(b.style.top) / 100,
+      parseFloat(b.style.width) / 100,
+      parseFloat(b.style.height) / 100,
+    ],
+  }));
+}
+
+function setEditing(on) {
+  editing = on;
+  document.body.classList.toggle("editing", on);
+  document.getElementById("edit-btn").setAttribute("aria-pressed", String(on));
+  document.getElementById("edit-btn").textContent = on ? "Redigerer" : "Rediger zoner";
+  document.getElementById("save-zones").hidden = !on;
+  document.getElementById("cancel-zones").hidden = !on;
+  if (on) {
+    originalRects = zoneBoxes().map(b => ({
+      b, left: b.style.left, top: b.style.top,
+      width: b.style.width, height: b.style.height,
+    }));
+  }
+}
+
+function beginDrag(ev) {
+  if (!editing) return;
+  const box = ev.target.closest(".zone");
+  if (!box) return;
+  ev.preventDefault();
+  ev.stopPropagation();
+
+  const stage = box.parentElement.getBoundingClientRect();
+  const corner = ev.target.dataset.corner || null;
+  const start = {
+    x: ev.clientX, y: ev.clientY,
+    left: parseFloat(box.style.left), top: parseFloat(box.style.top),
+    width: parseFloat(box.style.width), height: parseFloat(box.style.height),
+  };
+
+  const move = e => {
+    const dx = (e.clientX - start.x) / stage.width * 100;
+    const dy = (e.clientY - start.y) / stage.height * 100;
+    if (!corner) {
+      box.style.left = pct(Math.min(start.left + dx, 100 - start.width)) + "%";
+      box.style.top = pct(Math.min(start.top + dy, 100 - start.height)) + "%";
+      return;
+    }
+    const MIN = 3;
+    let { left, top, width, height } = start;
+    if (corner.includes("w")) {
+      const nl = pct(Math.min(left + dx, left + width - MIN));
+      width += left - nl; left = nl;
+    } else {
+      width = Math.max(MIN, Math.min(width + dx, 100 - left));
+    }
+    if (corner.includes("n")) {
+      const nt = pct(Math.min(top + dy, top + height - MIN));
+      height += top - nt; top = nt;
+    } else {
+      height = Math.max(MIN, Math.min(height + dy, 100 - top));
+    }
+    box.style.left = left + "%"; box.style.top = top + "%";
+    box.style.width = width + "%"; box.style.height = height + "%";
+  };
+
+  const up = () => {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", up);
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", up);
+}
+
+document.addEventListener("pointerdown", beginDrag, true);
+
+document.getElementById("edit-btn").addEventListener("click", () => setEditing(!editing));
+
+document.getElementById("cancel-zones").addEventListener("click", () => {
+  for (const o of originalRects || []) {
+    o.b.style.left = o.left; o.b.style.top = o.top;
+    o.b.style.width = o.width; o.b.style.height = o.height;
+  }
+  setEditing(false);
+});
+
+document.getElementById("save-zones").addEventListener("click", async ev => {
+  const btn = ev.target;
+  btn.disabled = true;
+  try {
+    const r = await fetch("/zones", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ zones: readRects() }),
+    });
+    if (!r.ok) { alert("Kunne ikke gemme: " + (await r.text())); return; }
+    setEditing(false);
+  } catch (e) {
+    alert("Kunne ikke gemme zonerne. Er Pi'en online?");
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+document.getElementById("watch-btn").addEventListener("click", () => {
+  const on =
+    document.getElementById("watch-btn").getAttribute("aria-pressed") === "true";
+  if (on && !confirm("Slå overvågningen fra? Der registreres og afspilles intet før du slår den til igen.")) return;
+  setMonitoring(!on);
+});
+
+function renderPause(p) {
+  if (!p) return;
+  pauseState = p;
+  renderMonitoring(p);
+  const btn = document.getElementById("sound-btn");
+  const label = document.getElementById("sound-label");
+  btn.classList.toggle("paused", p.paused);
+  document.getElementById("resume").hidden = !p.paused;
+
+  const short = document.getElementById("sound-label-short");
+  if (!p.paused) {
+    label.textContent = "Lyd aktiv";
+    short.textContent = "Lyd";
+  } else if (p.seconds_left == null) {
+    label.textContent = "Lyd pauset";
+    short.textContent = "Pauset";
+  } else {
+    const m = Math.ceil(p.seconds_left / 60);
+    label.textContent = `Lyd pauset ${m} min`;
+    short.textContent = `${m}m`;
+  }
+  btn.title = p.reason === "sikkerhedsventil"
+    ? "Sikkerhedsventilen udløste: for mange udløsninger på kort tid"
+    : (p.paused ? "Pauset manuelt" : "Lyde er slået til");
+}
+
+function toggleMenu(show) {
+  const menu = document.getElementById("sound-menu");
+  const btn = document.getElementById("sound-btn");
+  const open = show === undefined ? menu.hidden : show;
+  menu.hidden = !open;
+  btn.setAttribute("aria-expanded", open);
+
+  // On the phone the menu is fixed so the scrolling bar cannot clip it, which
+  // means it has to be told where the button currently is.
+  if (open && window.matchMedia("(max-width: 760px)").matches) {
+    menu.style.top = `${btn.getBoundingClientRect().bottom + 6}px`;
+  } else {
+    menu.style.top = "";
+  }
+}
+
+async function postPause(body) {
+  const btns = document.querySelectorAll("#sound-menu button");
+  btns.forEach(b => b.disabled = true);
+  try {
+    const r = await fetch("/pause", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    renderPause(await r.json());
+    toggleMenu(false);
+  } catch (e) {
+    alert("Kunne ikke ændre pause-tilstanden. Er Pi'en online?");
+  } finally {
+    btns.forEach(b => b.disabled = false);
+    refreshState();
+  }
+}
+
+function minutesLeftToday() {
+  const now = new Date();
+  const midnight = new Date(now);
+  midnight.setHours(24, 0, 0, 0);
+  return Math.max(1, Math.round((midnight - now) / 60000));
+}
+
+document.getElementById("sound-btn").addEventListener("click", ev => {
+  ev.stopPropagation();
+  toggleMenu();
+});
+document.addEventListener("click", ev => {
+  if (!ev.target.closest("#soundctl")) toggleMenu(false);
+});
+document.addEventListener("keydown", ev => {
+  if (ev.key === "Escape") toggleMenu(false);
+});
+
+document.getElementById("sound-menu").addEventListener("click", ev => {
+  const b = ev.target.closest("button");
+  if (!b) return;
+  if (b.id === "resume") return postPause({ resume: true });
+  const v = b.dataset.min;
+  if (v === undefined) return;
+  postPause({ minutes: v === "rest" ? minutesLeftToday()
+                                    : (v === "0" ? null : Number(v)) });
+});
+
+// Manual triggers are deliberate, so they fire even while the automatic
+// sounds are paused. They are logged as manual and do not count towards the
+// safety valve, which only exists to catch the detector running away.
+async function sendManual(sound) {
+  const btns = document.querySelectorAll(".manual button");
+  btns.forEach(b => b.disabled = true);
+  try {
+    const r = await fetch("/trigger", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sound }),
+    });
+    if (!r.ok) alert(`Kunne ikke sende "${sound}": ${await r.text()}`);
+  } catch (e) {
+    alert("Kunne ikke sende. Er Pi'en online?");
+  } finally {
+    btns.forEach(b => b.disabled = false);
+    refreshState();
+  }
+}
+
+document.querySelector(".manual").addEventListener("click", ev => {
+  const b = ev.target.closest("button[data-sound]");
+  if (b) sendManual(b.dataset.sound);
+});
+
+function el(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text !== undefined) n.textContent = text;
+  return n;
+}
+
+async function buildCameras() {
+  const cfg = await (await fetch("/config")).json();
+  const mode = document.getElementById("mode");
+  mode.textContent = cfg.dry_run ? "dry-run, ingen lyde" : "live";
+  if (!cfg.dry_run) mode.style.color = "var(--nej)";
+
+  // Behind the Cloudflare tunnel the page is https and go2rtc is reachable on
+  // the same origin (the tunnel routes /api and /stream.html to port 1984).
+  // On the plain-http LAN there is no such routing, so go straight to :1984.
+  // Guessing from the protocol keeps one config working in both places, and
+  // avoids an https page reaching for an http port, which browsers block.
+  const go2rtc = (cfg.go2rtc && cfg.go2rtc !== "auto")
+    ? cfg.go2rtc
+    : (location.protocol === "https:"
+        ? location.origin
+        : `${location.protocol}//${location.hostname}:1984`);
+
+  const wrap = document.getElementById("cams");
+  for (const cam of cfg.cameras) {
+    const card = el("div", "cam");
+    const h = el("h2");
+    const dot = el("span", "dot");
+    h.append(dot, document.createTextNode(cam.name));
+    const stage = el("div", "stage");
+
+    const frame = document.createElement("iframe");
+    // No mode= on purpose. Pinning it to webrtc kills the fallback, and WebRTC
+    // needs a direct UDP path to the Pi that does not exist through the tunnel.
+    // Left alone, the player negotiates webrtc on the LAN and MSE remotely.
+    frame.src = `${go2rtc}/stream.html?src=${encodeURIComponent(cam.src)}`;
+    frame.allow = "autoplay";
+    stage.append(frame);
+
+    for (const z of cam.zones) {
+      const [x, y, w, hh] = z.rect;
+      const box = el("div", "zone");
+      box.dataset.sound = z.sound;
+      box.style.left = x * 100 + "%";
+      box.style.top = y * 100 + "%";
+      box.style.width = w * 100 + "%";
+      box.style.height = hh * 100 + "%";
+      box.append(el("span", null, z.name));
+      for (const c of ["nw", "ne", "sw", "se"]) {
+        const hd = el("div", "handle " + c);
+        hd.dataset.corner = c;
+        box.append(hd);
+      }
+      box.dataset.camera = cam.name;
+      box.dataset.zone = z.name;
+      stage.append(box);
+      zoneEls.set(z.name, { box, dot });
+    }
+    card.append(h, stage);
+    wrap.append(card);
+  }
+}
+
+// Each player buffers from the moment its own stream connects, and the two
+// cameras never connect at the same instant, so one ends up running seconds
+// behind the other. Nudging both to the live edge keeps them showing the same
+// moment. The iframes are same-origin, so their video elements are reachable.
+const LIVE_SLACK = 1.2;   // seconds behind live before we bother correcting
+const LIVE_TARGET = 0.3;  // how close to the edge to land, leaving some buffer
+
+function videosInFrames() {
+  const out = [];
+  for (const f of document.querySelectorAll("iframe")) {
+    let doc = null;
+    try { doc = f.contentDocument; } catch (e) { continue; }
+    if (!doc) continue;
+    for (const v of doc.querySelectorAll("video")) out.push(v);
+  }
+  return out;
+}
+
+function catchUpToLive() {
+  for (const v of videosInFrames()) {
+    if (!v.buffered || !v.buffered.length) continue;
+    const edge = v.buffered.end(v.buffered.length - 1);
+    if (edge - v.currentTime > LIVE_SLACK) {
+      v.currentTime = Math.max(0, edge - LIVE_TARGET);
+    }
+    if (v.paused) v.play().catch(() => {});
+  }
+}
+
+function flash(zoneName) {
+  const hit = zoneEls.get(zoneName);
+  if (!hit) return;
+  hit.box.classList.add("hot");
+  hit.dot.classList.add("hot");
+  clearTimeout(hit.timer);
+  hit.timer = setTimeout(() => {
+    hit.box.classList.remove("hot");
+    hit.dot.classList.remove("hot");
+  }, 1200);
+}
+
+function render(ev, live = true) {
+  // Only today's log takes live events; while looking at an older day the
+  // stream would otherwise inject rows that do not belong to it.
+  if (live && shownDay !== todayStr()) return;
+
+  const log = document.getElementById("log");
+  log.querySelector(".empty")?.remove();
+
+  const row = el("div", `row ${ev.type}`);
+  if (ev.suppressed) row.classList.add("suppressed");
+  if (ev.sound) row.dataset.sound = ev.sound;
+
+  row.append(el("time", null, (ev.at || "").slice(11)));
+
+  const what = el("div", "what");
+  if (ev.type === "status") {
+    what.append(document.createTextNode(`${ev.camera}: ${ev.note}`));
+  } else if (ev.type === "monitoring") {
+    what.append(el("strong", null,
+      ev.active ? "Overvågning aktiv" : "Overvågning fra"));
+  } else if (ev.type === "pause") {
+    what.append(el("strong", null, ev.paused ? "Lyd pauset" : "Lyd aktiv"),
+                document.createTextNode(" " + (ev.note || "")));
+  } else {
+    // Manual sends carry a sound but no zone; detections carry a zone but no
+    // sound. Falling back keeps either from rendering as "undefined".
+    let head, tail;
+    if (ev.type === "trigger") {
+      head = `"${ev.sound}"`;
+      tail = ev.zone ? ` (${ev.zone})` : "";
+    } else if (ev.type === "manual") {
+      head = `"${ev.sound}"`;
+      tail = " sendt manuelt";
+    } else if (ev.type === "blocked") {
+      head = ev.zone || `"${ev.sound}"`;
+      tail = " blokeret";
+    } else {
+      head = ev.zone || ev.sound || ev.camera || "";
+      tail = LABELS[ev.type] ? ` ${LABELS[ev.type]}` : "";
+    }
+    what.append(el("strong", null, head), document.createTextNode(tail));
+    if (ev.note) what.append(el("span", "note", ev.note));
+  }
+  row.append(what);
+  row.append(el("div", "pct", ev.pct !== undefined ? ev.pct + "%" : ""));
+
+  log.prepend(row);
+  while (log.children.length > 400) log.lastChild.remove();
+
+  if (!live) return;
+  if (ev.type === "detect" && !ev.suppressed) flash(ev.zone);
+  if (["detect", "trigger", "blocked", "pause", "manual", "monitoring"]
+        .includes(ev.type)) {
+    scheduleState();
+  }
+}
+
+let events = null;
+
+function connect() {
+  const conn = document.getElementById("conn");
+  if (events) events.close();
+  const src = events = new EventSource("/events");
+  src.onopen = () => {
+    conn.className = "conn up";
+    conn.textContent = "forbundet";
+  };
+  src.onerror = () => {
+    conn.className = "conn down";
+    conn.textContent = "afbrudt, prøver igen";
+  };
+  src.onmessage = (e) => render(JSON.parse(e.data));
+}
+
+// The log lives on the Pi, one file per day, so it is the same on every
+// device and survives a restart.
+let shownDay = null;
+const todayStr = () => new Date().toLocaleDateString("sv");
+
+async function loadDay(day) {
+  shownDay = day;
+  const log = document.getElementById("log");
+  log.innerHTML = "";
+  log.append(el("div", "empty", "Henter …"));
+  try {
+    const r = await fetch(`/history?day=${encodeURIComponent(day)}`,
+                          { cache: "no-store" });
+    const data = await r.json();
+    log.innerHTML = "";
+    if (!data.events.length) {
+      log.append(el("div", "empty", "Ingen registreringer denne dag"));
+      return;
+    }
+    for (const ev of data.events) render(ev, false);
+  } catch (e) {
+    log.innerHTML = "";
+    log.append(el("div", "empty", "Kunne ikke hente loggen"));
+  }
+}
+
+async function loadDays() {
+  const sel = document.getElementById("day-picker");
+  let days = [];
+  try {
+    days = await (await fetch("/days", { cache: "no-store" })).json();
+  } catch (e) { /* fall through to today only */ }
+  if (!days.includes(todayStr())) days.unshift(todayStr());
+
+  const fmt = d => d === todayStr() ? "I dag" : fmtDate(d);
+  sel.innerHTML = days.map(d => `<option value="${d}">${fmt(d)}</option>`).join("");
+  sel.value = shownDay && days.includes(shownDay) ? shownDay : days[0];
+}
+
+document.getElementById("day-picker").addEventListener("change", ev => {
+  loadDay(ev.target.value);
+});
+
+function applyDetectFilter(show) {
+  document.getElementById("log").classList.toggle("hide-detects", !show);
+  const b = document.getElementById("toggle-detects");
+  b.setAttribute("aria-pressed", String(show));
+  b.textContent = show ? "Skjul detaljer" : "Vis detaljer";
+  try { localStorage.setItem("abbie.showDetects", show ? "1" : "0"); } catch (e) {}
+}
+
+document.getElementById("toggle-detects").addEventListener("click", () => {
+  const showing =
+    document.getElementById("toggle-detects").getAttribute("aria-pressed") === "true";
+  applyDetectFilter(!showing);
+});
+
+buildCameras().then(async () => {
+  let show = false;
+  try { show = localStorage.getItem("abbie.showDetects") === "1"; } catch (e) {}
+  applyDetectFilter(show);
+  await loadDays();
+  await loadDay(document.getElementById("day-picker").value);
+  connect();
+  refreshState();
+  // Keeps the "for X min siden" wording honest while the page sits open.
+  setInterval(refreshState, 30000);
+  // Give the players a moment to connect, then hold them at the live edge.
+  setTimeout(catchUpToLive, 4000);
+  setInterval(catchUpToLive, 5000);
+});
+</script>
+</body>
+</html>

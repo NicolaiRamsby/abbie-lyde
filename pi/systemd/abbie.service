@@ -1,0 +1,16 @@
+[Unit]
+Description=Abbie zone motion detection
+After=go2rtc.service
+Requires=go2rtc.service
+
+[Service]
+User=nicolai
+WorkingDirectory=/opt/abbie
+# Live: detections play sounds on the iPad via Pushover.
+# Add --dry-run back here to make it watch silently again.
+ExecStart=/usr/bin/python3 /opt/abbie/abbie.py /opt/abbie/config.json --bind 0.0.0.0
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
