@@ -11,7 +11,7 @@ Adgang: `ssh nicolai@abbie` over Tailscale, virker fra ethvert netværk
 
 | Fil | Rolle |
 |---|---|
-| `abbie.py` | Detektor og webserver. Én ffmpeg pr. kamera, zone-diff, Pushover, log |
+| `abbie.py` | Detektor og webserver. Én ffmpeg pr. kamera, zone-diff, Pushover, log, billeder |
 | `index.html` | Web-interface: live streams, zone-editor, log, pause, manuelle knapper |
 | `config.example.json` | Zoner, tærskler, lyde. Den rigtige med nøgler ligger kun på Pi'en |
 | `go2rtc.example.yaml` | Kamera-streams. HD til visning, `subtype=sd` til detektion |
@@ -27,6 +27,15 @@ Bevidste valg. Lav dem ikke om uden at spørge Nicolai.
 - **Reglen tjekkes når bevægelsen ses**, ikke når lyden skal afspilles. Ellers
   ligger gammel bevægelse i kurven og kasserer ind i samme sekund et "nej"
   armerer reglen, hvilket ligner ros for ingenting.
+- **Der skal gå mindst 8 sekunder fra "nej" til "dygtig" falder**
+  (`sequence_min_seconds`). Gitteret og kurv 2 sidder på samme kamera, så én
+  genstand der krydser billedet kan ramme begge zoner i samme sekund. 18.
+  august udløste to dygtig 4 sekunder efter det nej der armerede dem, hvor de
+  elleve rigtige den dag tog 11-21 sekunder. Grænsen måles til det øjeblik
+  lyden falder, altså inklusive kurvens delay på 3,5 sekunder, for målt på
+  bevægelsen alene ville 8 sekunder også have ramt den korteste rigtige.
+  Reglen udskyder i praksis mere end den fjerner: bliver hun liggende,
+  kommer rosen få sekunder senere i stedet.
 - **En blokeret udløsning må aldrig bruge zonens cooldown.** `last_fired`
   sættes først når lyden faktisk afspilles.
 - **En zone skal ændre sig mindst `local_ratio` gange mere end resten af
@@ -37,6 +46,40 @@ Bevidste valg. Lav dem ikke om uden at spørge Nicolai.
 - **Ingen automatisk sikkerhedsventil.** Der var én; den lukkede systemet ned i
   en time og blev fjernet igen.
 - Cooldown: kurvene 0 sekunder, gitteret 10.
+- **Der gemmes kun billeder når en lyd faktisk bliver afspillet.** Blokerede
+  udløsninger og de tusinder af detektioner om dagen gemmer ingenting.
+
+## Billeder ved hver lyd
+
+Hver gang en lyd bliver afspillet, hentes et JPEG fra det kamera der udløste
+den, og stien lægges i eventet i loggen. I web-interfacet er loggen ren tekst;
+de to tællere (`nej` og `dygtig`) åbner en oversigt over dagens billeder med
+zonen tegnet ovenpå. Det er svaret på om hun faktisk var henne ved
+gitteret, som procenterne ikke kan give.
+
+- **Billedet er fuld opløsning**, 2304x1296 fra mi360 og 1920x1080 fra
+  c500pro, ca. 120-160 kB pr. styk. Detektionen kører stadig på substreamen.
+- **En ffmpeg pr. kamera dekoder HD-streamen løbende** ved 2 fps og holder de
+  sidste 10 sekunder som JPEG i hukommelsen. Når en lyd går, tages frame'et fra
+  netop det øjeblik ud af bufferen. Ingen ventetid.
+- **Derfor er go2rtc's `frame.jpeg` kun fallback.** Den venter på næste keyframe
+  i H265-streamen, og målt på Pi'en gav det billeder 2-3 sekunder efter lyden.
+  Den bruges nu kun hvis bufferen er tom, fx lige efter en genstart.
+- **Prisen er ca. 27 % af én kerne pr. kamera.** Pi 5 har fire, og
+  detektionen bruger 2,4 %. Skru ned med `"snapshots": {"fps": 1}` eller slå
+  bufferen fra med `"live": false`, så falder den tilbage til go2rtc.
+- **Bemærk:** HD-streamen står nu åben hele tiden, hvor den før kun kørte når du
+  havde siden åben. Det er samme antal p2p-sessioner som når du ser med, men
+  nu permanent.
+- **Kameraets indbrændte ur står 1-2 sekunder bag vægguret**, fordi streamen er
+  forsinket. Detektoren læser en lige så forsinket stream, så billedet passer
+  til det frame der udløste, også når urene ikke matcher log-tiden.
+- **Billedet tages når lyden afspilles.** For `dygtig` er der 3,5 sekunders
+  delay, så billedet viser det øjeblik rosen falder, ikke det øjeblik hun trådte
+  i kurven.
+- Ligger i `/opt/abbie/snapshots/<dato>/` og ryddes med samme `keep_days` som
+  loggen. En dag med 70 lyde er ca. 10 MB, 90 dage under 1 GB.
+- Slå det helt fra med `"snapshots": {"enabled": false}`.
 
 ## Fælder der har kostet tid
 
@@ -81,7 +124,17 @@ curl -s -b "$J" "https://abbie.deveo.dk/history?day=$(date +%F)" | python3 -m js
 curl -s -b "$J" https://abbie.deveo.dk/state
 ```
 
-Endpoints: `/state`, `/history?day=`, `/days`, `/config`, `/events` (SSE).
+Endpoints: `/state`, `/history?day=`, `/days`, `/config`, `/events` (SSE),
+`/snap?f=<dato>/<fil>.jpg`.
+
+`/history` returnerer de sidste 3000 linjer af dagen, og på en travl dag er de
+alle detektioner. Vil du kun have de afspillede lyde, og dem alle, så brug
+`&only=sounds`:
+
+```bash
+curl -s -b "$J" "https://abbie.deveo.dk/history?day=$(date +%F)&only=sounds" \
+  | python3 -m json.tool
+```
 
 ## Deploy
 
@@ -93,6 +146,14 @@ Endpoints: `/state`, `/history?day=`, `/days`, `/config`, `/events` (SSE).
 Scriptet finder selv en åben vej ind, lægger filerne på plads, genstarter
 tjenesten og verificerer med checksum at det der ligger på Pi'en er det du
 sendte. Fejler noget, printer den de sidste linjer fra tjenestens log.
+
+`deploy.sh` sender kun `abbie.py` og `index.html`. Rører du `Caddyfile`, skal
+den lægges på plads i hånden, ellers rammer nye endpoints go2rtc og giver 404:
+
+```bash
+scp pi/Caddyfile nicolai@abbie:~/ && ssh nicolai@abbie \
+  'sudo install -m 644 ~/Caddyfile /etc/caddy/Caddyfile && sudo systemctl reload caddy'
+```
 
 Push **aldrig** `config.json` fra en lokal kopi: zoner redigeres i browseren og
 skrives direkte på Pi'en, så en blind overskrivning smider dem væk. Skal en

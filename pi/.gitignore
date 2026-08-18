@@ -4,3 +4,4 @@ go2rtc.yaml
 auth.json
 pause.json
 log/
+snapshots/

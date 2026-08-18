@@ -91,7 +91,17 @@
     "device": "ipad6gwifi"
   },
   "keep_days": 90,
+  "snapshots": {
+    "enabled": true,
+    "live": true,
+    "fps": 2,
+    "buffer_seconds": 10,
+    "quality": 4,
+    "keep_days": 90,
+    "go2rtc_api": "http://127.0.0.1:1984"
+  },
   "sequence": {
     "dygtig": "nej"
-  }
+  },
+  "sequence_min_seconds": 8
 }

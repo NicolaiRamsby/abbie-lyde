@@ -137,15 +137,23 @@
   }
   /* Hiding rather than skipping keeps the toggle instant: the rows are
      already built, so flipping it does not re-fetch the day. */
-  /* Blocked rows say what did not happen, which is the same noise as
-     the raw detections. Hidden together, only played sounds remain. */
-  #log.hide-detects .row.detect,
-  #log.hide-detects .row.blocked { display: none; }
+  /* The log shows what actually happened: a sound played. Detections, blocked
+     triggers and streams dropping out run into the thousands a day, so they
+     are detail rather than events, and only appear behind the toggle. */
+  #log.sounds-only .row:not(.trigger):not(.manual) { display: none; }
 
   .card h2 .day { font-weight: 400; color: var(--muted); font-size: 11px; }
-  .counts { display: grid; grid-template-columns: repeat(3, 1fr); }
-  .counts > div { padding: 12px 8px; text-align: center; border-right: 1px solid var(--line); }
-  .counts > div:last-child { border-right: 0; }
+  .counts { display: grid; grid-template-columns: repeat(2, 1fr); }
+  .counts > * { padding: 12px 8px; text-align: center; border-right: 1px solid var(--line); }
+  .counts > *:last-child { border-right: 0; }
+  /* The two sound counters open the pictures behind them, so they have to look
+     pressable without turning the card into a row of buttons. */
+  .counts > button {
+    background: none; border: 0; border-right: 1px solid var(--line);
+    color: inherit; font: inherit; cursor: pointer;
+  }
+  .counts > button:hover { background: rgba(255,255,255,.04); }
+  .counts > button .k { text-decoration: underline dotted; text-underline-offset: 2px; }
   .counts .n { font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.2; }
   .counts .n.nej { color: var(--nej); }
   .counts .n.dygtig { color: var(--dygtig); }
@@ -262,6 +270,60 @@
   .row.detect .what strong { color: var(--text); }
   .row.suppressed { opacity: .5; }
   .row.status .what { color: var(--muted); font-style: italic; }
+  /* The sheet scrolls, not the overlay: a sticky heading inside a scrolling
+     overlay lets the pictures slide up through the gap above it. */
+  .modal {
+    position: fixed; inset: 0; z-index: 50; background: rgba(8,10,14,.82);
+    display: flex; align-items: stretch; justify-content: center;
+    padding: 16px; overflow: hidden;
+    padding-top: calc(16px + env(safe-area-inset-top));
+    padding-bottom: calc(16px + env(safe-area-inset-bottom));
+  }
+  .sheet {
+    display: flex; flex-direction: column; max-height: 100%; min-height: 0;
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 12px; width: 100%; max-width: 900px;
+    box-shadow: 0 20px 60px rgba(0,0,0,.6);
+  }
+  .sheet > h2 { flex: 0 0 auto; border-radius: 12px 12px 0 0; }
+  .shots {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 12px; padding: 12px; overflow-y: auto; min-height: 0;
+    -webkit-overflow-scrolling: touch;
+  }
+  .shot { margin: 0; }
+  .shot .frame {
+    position: relative; aspect-ratio: 16 / 9; background: #000;
+    border: 1px solid var(--line); border-radius: 6px; overflow: hidden;
+  }
+  .shot .frame img {
+    width: 100%; height: 100%; object-fit: cover; display: block;
+    cursor: zoom-in;
+  }
+  .shot .frame.nopic {
+    display: flex; align-items: center; justify-content: center;
+    background: #14171d; color: var(--muted); font-size: 12px;
+  }
+  /* The zone is drawn on top of the picture. A "nej" fired while she was
+     nowhere near the gate is then visible at a glance. */
+  .shot .zbox {
+    position: absolute; border: 2px solid rgba(255,107,94,.85);
+    border-radius: 3px; pointer-events: none;
+  }
+  .shot .zbox[data-sound="dygtig"] { border-color: rgba(74,222,128,.8); }
+  .shot figcaption {
+    display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap;
+    font-size: 12px; color: var(--muted); padding: 6px 2px 0;
+  }
+  .shot figcaption strong {
+    color: var(--text); font-variant-numeric: tabular-nums;
+  }
+  .viewer {
+    position: fixed; inset: 0; z-index: 60; background: rgba(0,0,0,.94);
+    display: flex; align-items: center; justify-content: center;
+    cursor: zoom-out; padding: 8px;
+  }
+  .viewer img { max-width: 100%; max-height: 100%; }
   .empty { padding: 22px 12px; color: var(--muted); text-align: center; font-size: 13px; }
 </style>
 </head>
@@ -309,18 +371,14 @@
     <div class="card">
       <h2>I dag <span class="day" id="day"></span></h2>
       <div class="counts">
-        <div>
+        <button type="button" data-sound="nej" title="Se billederne">
           <div class="n nej" id="c-nej">0</div><div class="k">nej</div>
           <div class="t" id="t-nej">aldrig</div>
-        </div>
-        <div>
+        </button>
+        <button type="button" data-sound="dygtig" title="Se billederne">
           <div class="n dygtig" id="c-dygtig">0</div><div class="k">dygtig</div>
           <div class="t" id="t-dygtig">aldrig</div>
-        </div>
-        <div>
-          <div class="n" id="c-detect">0</div><div class="k">registreringer</div>
-          <div class="t">i alt</div>
-        </div>
+        </button>
       </div>
     </div>
 
@@ -337,6 +395,16 @@
   </div>
 </main>
 
+<div class="modal" id="modal" hidden>
+  <div class="sheet">
+    <h2><span id="modal-title"></span>
+      <button class="chip" id="modal-close">Luk</button></h2>
+    <div class="shots" id="modal-body"></div>
+  </div>
+</div>
+
+<div class="viewer" id="viewer" hidden><img id="viewer-img" alt=""></div>
+
 <script>
 const LABELS = {
   detect: "registreret bevægelse",
@@ -347,6 +415,9 @@ const LABELS = {
   pause: "",
 };
 const zoneEls = new Map();
+// Zone rectangles by camera and name, so a snapshot can be shown with the box
+// that fired drawn on top of it.
+const zoneRects = new Map();
 
 const fmtDate = iso => iso ? `${iso.slice(8,10)}-${iso.slice(5,7)}-${iso.slice(0,4)}` : "";
 
@@ -374,7 +445,6 @@ async function refreshState() {
     set("day", fmtDate(s.day));
     set("c-nej", s.counts?.nej ?? 0);
     set("c-dygtig", s.counts?.dygtig ?? 0);
-    set("c-detect", s.detections ?? 0);
     set("t-nej", fmtLast(s.last?.nej));
     set("t-dygtig", fmtLast(s.last?.dygtig));
     renderPause(s.pause);
@@ -761,6 +831,7 @@ async function buildCameras() {
       }
       box.dataset.camera = cam.name;
       box.dataset.zone = z.name;
+      zoneRects.set(`${cam.name}|${z.name}`, { rect: z.rect, sound: z.sound });
       stage.append(box);
       zoneEls.set(z.name, { box, dot });
     }
@@ -810,12 +881,187 @@ function flash(zoneName) {
   }, 1200);
 }
 
+// The event reaches the browser before the picture has been fetched from the
+// camera, so the first request for a live row can arrive too early. One retry
+// covers that; anything still missing is reported to the caller.
+function snapImg(rel, alt, onmissing) {
+  const img = el("img");
+  const url = "/snap?f=" + encodeURIComponent(rel);
+  let retried = false;
+  img.loading = "lazy";
+  // Empty alt and hidden until it has loaded: during the wait the browser would
+  // otherwise draw a broken-image icon with the caption text next to it.
+  img.alt = "";
+  img.title = alt || "";
+  img.style.visibility = "hidden";
+  img.addEventListener("load", () => { img.style.visibility = "visible"; });
+  img.addEventListener("error", () => {
+    if (retried) { onmissing?.(); return; }
+    retried = true;
+    setTimeout(() => { img.src = url + "&r=1"; }, 1500);
+  });
+  img.addEventListener("click", () => openViewer(img.src, img.title));
+  img.src = url;
+  return img;
+}
+
+function openViewer(src, alt) {
+  const img = document.getElementById("viewer-img");
+  img.src = src;
+  img.alt = alt || "";
+  document.getElementById("viewer").hidden = false;
+}
+
+function closeViewer() {
+  document.getElementById("viewer").hidden = true;
+  document.getElementById("viewer-img").src = "";
+}
+
+const clock = ev => (ev.at || "").slice(11);
+
+function shotCard(ev) {
+  const fig = el("figure", "shot");
+  const frame = el("div", "frame");
+  const missing = text => {
+    frame.classList.add("nopic");
+    frame.textContent = text;
+  };
+  if (ev.snap) {
+    frame.append(snapImg(ev.snap, `${ev.zone || ev.sound} ${clock(ev)}`,
+                         () => missing("billedet mangler")));
+    const z = zoneRects.get(`${ev.camera}|${ev.zone}`);
+    if (z) {
+      const box = el("div", "zbox");
+      box.dataset.sound = ev.sound;
+      box.style.left = z.rect[0] * 100 + "%";
+      box.style.top = z.rect[1] * 100 + "%";
+      box.style.width = z.rect[2] * 100 + "%";
+      box.style.height = z.rect[3] * 100 + "%";
+      frame.append(box);
+    }
+  } else {
+    missing(ev.type === "manual" ? "sendt manuelt" : "intet billede");
+  }
+  const cap = el("figcaption");
+  cap.append(el("strong", null, clock(ev)));
+  cap.append(el("span", null, ev.type === "manual"
+    ? "manuelt"
+    : [ev.zone, ev.pct !== undefined ? ev.pct + "%" : null]
+        .filter(Boolean).join(" \u00b7 ")));
+  fig.append(frame, cap);
+  return fig;
+}
+
+let modalSound = null;
+// Fetched apart from the log, which may be showing a capped page of a busy day.
+// The pictures are always every sound of the day the day-picker points at, and
+// the title says which day that is.
+let daySounds = { day: null, events: [] };
+
+async function loadSounds(day) {
+  if (daySounds.day === day) return;
+  const r = await fetch(`/history?day=${encodeURIComponent(day)}&only=sounds`,
+                        { cache: "no-store" });
+  daySounds = { day, events: (await r.json()).events };
+}
+
+function shotsTitle() {
+  const day = shownDay === todayStr() ? "i dag" : fmtDate(shownDay);
+  const n = document.querySelectorAll("#modal-body .shot").length;
+  document.getElementById("modal-title").textContent =
+    `"${modalSound}" \u00b7 ${n} ${day}`;
+}
+
+function renderShots() {
+  const body = document.getElementById("modal-body");
+  const rows = daySounds.events
+    .filter(e => (e.type === "trigger" || e.type === "manual")
+                 && e.sound === modalSound)
+    .reverse();
+  body.innerHTML = "";
+  for (const ev of rows) body.append(shotCard(ev));
+  if (!rows.length) body.append(el("div", "empty", "Ingen denne dag"));
+  shotsTitle();
+}
+
+// One card in, rather than rebuilding the grid. A rebuild restarts every image
+// download, and a busy stretch then leaves the modal permanently blank.
+function addShot(ev) {
+  const body = document.getElementById("modal-body");
+  body.querySelector(".empty")?.remove();
+  body.prepend(shotCard(ev));
+  shotsTitle();
+}
+
+async function openShots(sound) {
+  modalSound = sound;
+  document.getElementById("modal-title").textContent = "Henter \u2026";
+  document.getElementById("modal-body").innerHTML = "";
+  document.getElementById("modal").hidden = false;
+  try {
+    await loadSounds(shownDay || todayStr());
+  } catch (e) {
+    document.getElementById("modal-title").textContent = "Kunne ikke hente";
+    return;
+  }
+  if (modalSound === sound) renderShots();
+}
+
+function closeShots() {
+  modalSound = null;
+  document.getElementById("modal").hidden = true;
+  document.getElementById("modal-body").innerHTML = "";
+}
+
+document.querySelector(".counts").addEventListener("click", ev => {
+  const b = ev.target.closest("button[data-sound]");
+  if (b) openShots(b.dataset.sound);
+});
+document.getElementById("modal-close").addEventListener("click", closeShots);
+document.getElementById("modal").addEventListener("click", ev => {
+  if (ev.target.id === "modal") closeShots();
+});
+document.getElementById("viewer").addEventListener("click", closeViewer);
+document.addEventListener("keydown", ev => {
+  if (ev.key !== "Escape") return;
+  if (!document.getElementById("viewer").hidden) closeViewer();
+  else if (modalSound) closeShots();
+});
+
+// With the log filtered down to sounds, a day of nothing but detections would
+// look like an empty log rather than a quiet one.
+function updateEmpty() {
+  const log = document.getElementById("log");
+  const soundsOnly = log.classList.contains("sounds-only");
+  const shown = log.querySelectorAll(
+    soundsOnly ? ".row.trigger, .row.manual" : ".row");
+  const placeholder = log.querySelector(".empty");
+  if (shown.length) {
+    placeholder?.remove();
+    return;
+  }
+  const text = soundsOnly
+    ? "Ingen lyde denne dag. Tryk \u201eVis detaljer\u201c for resten."
+    : "Ingen registreringer denne dag";
+  if (placeholder) placeholder.textContent = text;
+  else log.append(el("div", "empty", text));
+}
+
 function render(ev, live = true) {
   // Only today's log takes live events; while looking at an older day the
   // stream would otherwise inject rows that do not belong to it.
   if (live && shownDay !== todayStr()) return;
 
   const log = document.getElementById("log");
+  if (live) {
+    if (ev.type === "detect" && !ev.suppressed) flash(ev.zone);
+    if (["detect", "trigger", "blocked", "pause", "manual", "monitoring"]
+          .includes(ev.type)) scheduleState();
+    // The default view fetched sounds only. Building a detection here just to
+    // hide it would fill the row cap and push the sounds out of the log.
+    if (log.classList.contains("sounds-only")
+        && ev.type !== "trigger" && ev.type !== "manual") return;
+  }
   log.querySelector(".empty")?.remove();
 
   const row = el("div", `row ${ev.type}`);
@@ -859,12 +1105,7 @@ function render(ev, live = true) {
   log.prepend(row);
   while (log.children.length > 400) log.lastChild.remove();
 
-  if (!live) return;
-  if (ev.type === "detect" && !ev.suppressed) flash(ev.zone);
-  if (["detect", "trigger", "blocked", "pause", "manual", "monitoring"]
-        .includes(ev.type)) {
-    scheduleState();
-  }
+  if (live) updateEmpty();
 }
 
 let events = null;
@@ -881,7 +1122,16 @@ function connect() {
     conn.className = "conn down";
     conn.textContent = "afbrudt, prøver igen";
   };
-  src.onmessage = (e) => render(JSON.parse(e.data));
+  src.onmessage = (e) => {
+    const ev = JSON.parse(e.data);
+    const today = shownDay === todayStr();
+    if (today && daySounds.day === shownDay
+        && (ev.type === "trigger" || ev.type === "manual")) {
+      daySounds.events.push(ev);
+      if (modalSound === ev.sound) addShot(ev);
+    }
+    render(ev);
+  };
 }
 
 // The log lives on the Pi, one file per day, so it is the same on every
@@ -891,19 +1141,21 @@ const todayStr = () => new Date().toLocaleDateString("sv");
 
 async function loadDay(day) {
   shownDay = day;
+  if (daySounds.day !== day) daySounds = { day: null, events: [] };
   const log = document.getElementById("log");
   log.innerHTML = "";
   log.append(el("div", "empty", "Henter …"));
   try {
-    const r = await fetch(`/history?day=${encodeURIComponent(day)}`,
-                          { cache: "no-store" });
+    // Only what is going to be shown. A day holds thousands of detections and
+    // a few dozen sounds, and building rows just to hide them is what made the
+    // page slow to open on a phone.
+    const only = log.classList.contains("sounds-only") ? "&only=sounds" : "";
+    const r = await fetch(
+      `/history?day=${encodeURIComponent(day)}${only}`, { cache: "no-store" });
     const data = await r.json();
     log.innerHTML = "";
-    if (!data.events.length) {
-      log.append(el("div", "empty", "Ingen registreringer denne dag"));
-      return;
-    }
     for (const ev of data.events) render(ev, false);
+    updateEmpty();
   } catch (e) {
     log.innerHTML = "";
     log.append(el("div", "empty", "Kunne ikke hente loggen"));
@@ -927,12 +1179,14 @@ document.getElementById("day-picker").addEventListener("change", ev => {
   loadDay(ev.target.value);
 });
 
-function applyDetectFilter(show) {
-  document.getElementById("log").classList.toggle("hide-detects", !show);
+function applyDetectFilter(show, reload = true) {
+  document.getElementById("log").classList.toggle("sounds-only", !show);
   const b = document.getElementById("toggle-detects");
   b.setAttribute("aria-pressed", String(show));
   b.textContent = show ? "Skjul detaljer" : "Vis detaljer";
   try { localStorage.setItem("abbie.showDetects", show ? "1" : "0"); } catch (e) {}
+  if (reload && shownDay) loadDay(shownDay);
+  else updateEmpty();
 }
 
 document.getElementById("toggle-detects").addEventListener("click", () => {
@@ -944,7 +1198,7 @@ document.getElementById("toggle-detects").addEventListener("click", () => {
 buildCameras().then(async () => {
   let show = false;
   try { show = localStorage.getItem("abbie.showDetects") === "1"; } catch (e) {}
-  applyDetectFilter(show);
+  applyDetectFilter(show, false);
   await loadDays();
   await loadDay(document.getElementById("day-picker").value);
   connect();

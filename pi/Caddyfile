@@ -13,7 +13,7 @@
 			uri /auth
 		}
 
-		@monitor path / /index.html /config /state /events /pause /trigger /history /days /monitoring /zones
+		@monitor path / /index.html /config /state /events /pause /trigger /history /days /monitoring /zones /snap
 		handle @monitor {
 			reverse_proxy 127.0.0.1:8099
 		}

@@ -16,6 +16,7 @@ watched and judged before any sound is actually played.
 """
 
 import argparse
+import collections
 import getpass
 import hashlib
 import hmac
@@ -23,7 +24,9 @@ import json
 import os
 import queue
 import random
+import re
 import secrets
+import shutil
 import subprocess
 import sys
 import threading
@@ -55,6 +58,7 @@ class EventBus:
         self.zones = []
         self.log_dir = log_dir
         self.keep_days = keep_days
+        self.snapshots = None
         self.last_pruned = None
         if log_dir:
             os.makedirs(log_dir, exist_ok=True)
@@ -97,8 +101,15 @@ class EventBus:
         except (OSError, TypeError):
             return []
 
-    def read_day(self, day, limit=3000):
-        """Newest last, capped so a very busy day cannot blow up the page."""
+    def read_day(self, day, limit=3000, only=None):
+        """Newest last, capped so a very busy day cannot blow up the page.
+
+        A day runs to thousands of detections and only a few dozen sounds, so
+        the cap used to cut the morning's played sounds off the top: the page
+        said nothing had happened while the counter said thirty. Asking for
+        sounds only skips past that, and limit=None reads the whole day, which
+        is what rebuilding the counters needs.
+        """
         if not self.log_dir or not day.replace("-", "").isdigit():
             return []
         try:
@@ -107,12 +118,16 @@ class EventBus:
         except OSError:
             return []
         out = []
-        for line in lines[-limit:]:
+        for line in lines if limit is None or only else lines[-limit:]:
             try:
-                out.append(json.loads(line))
+                event = json.loads(line)
             except ValueError:
                 continue
-        return out
+            if only == "sounds" and event.get("type") not in ("trigger",
+                                                              "manual"):
+                continue
+            out.append(event)
+        return out if limit is None else out[-limit:]
 
     def publish(self, event):
         event = dict(event, at=time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -335,13 +350,10 @@ class Stats:
 class Guard:
     """Decides whether a trigger is allowed to make a sound.
 
-    Two independent brakes:
-
-    - A manual pause, set from the web interface.
-    - A safety valve that pauses on its own if triggers come far too fast,
-      which is the "something went wrong and Abbie is alone with a shouting
-      speaker" case. A person has to be watching for the manual button to
-      help; the valve does not.
+    Two brakes: the manual pause from the web interface, and the sequence rule
+    that keeps a dygtig from arriving without a nej before it. There is
+    deliberately no automatic safety valve; there was one, it shut the system
+    down for an hour without warning, and it was taken out again.
 
     The state is written to disk on purpose. Pausing means something is wrong,
     so a restart must never quietly start playing sounds again.
@@ -359,7 +371,16 @@ class Guard:
         # since the last one. Praise for settling should follow being told off
         # for standing at the door, not repeat on its own.
         self.sequence = (cfg or {}).get("sequence") or {}
+        # Being armed is not enough: the movement has to arrive a while after
+        # the telling-off. On 18 August two dygtig fired four seconds after the
+        # nej that armed them, with the basket movement starting in the same
+        # second as the movement at the gate. One object crossing two zones on
+        # the same camera looks exactly like a dog changing her mind, and time
+        # is the only thing that separates them. The eleven real ones that day
+        # took between eleven and twenty seconds.
+        self.sequence_min = (cfg or {}).get("sequence_min_seconds", 8)
         self.armed = {}
+        self.armed_at = {}
 
         self._load()
 
@@ -370,6 +391,7 @@ class Guard:
             self.until = d.get("until")
             self.reason = d.get("reason")
             self.armed = d.get("armed") or {}
+            self.armed_at = d.get("armed_at") or {}
             self.monitoring = d.get("monitoring", True)
             if self.until is not None and self.until != "forever" \
                     and self.until < time.time():
@@ -382,7 +404,7 @@ class Guard:
             tmp = self.path + ".tmp"
             with open(tmp, "w") as fh:
                 json.dump({"until": self.until, "reason": self.reason,
-                           "armed": self.armed,
+                           "armed": self.armed, "armed_at": self.armed_at,
                            "monitoring": self.monitoring}, fh)
             os.replace(tmp, self.path)
         except OSError as exc:
@@ -416,7 +438,6 @@ class Guard:
     def resume(self):
         with self.lock:
             self.until, self.reason = None, None
-            self.recent.clear()
             self._save()
             snap = self._snapshot_locked()
         self.bus.publish({"type": "pause", "note": "genoptaget", "paused": False})
@@ -432,6 +453,7 @@ class Guard:
                 # A new session starts unarmed, so coming home and leaving
                 # again cannot carry yesterday's nej over into a free dygtig.
                 self.armed = {}
+                self.armed_at = {}
             self._save()
             snap = self._snapshot_locked()
         self.bus.publish({
@@ -447,38 +469,57 @@ class Guard:
             for dependent, required in self.sequence.items():
                 if sound == required:
                     self.armed[dependent] = True
+                    self.armed_at[dependent] = time.time()
                 elif sound == dependent:
                     self.armed[dependent] = False
             self._save()
 
-    def would_allow(self, sound):
+    def _sequence_note_locked(self, sound, in_seconds=0):
+        """Why this sound may not play yet, or None if the rule is satisfied.
+
+        Not armed until the required sound has actually played, so a fresh
+        start, or a restart, cannot open with a dygtig.
+
+        The gap is measured to the moment the sound would land, which is why
+        the zone's delay is passed in: checked against the movement alone, an
+        eight second minimum would also have blocked the shortest real praise
+        of 18 August, where the basket movement came seven and a half seconds
+        after the nej and the sound landed at eleven.
+        """
+        required = self.sequence.get(sound)
+        if not required:
+            return None
+        if not self.armed.get(sound):
+            return f"venter på {required} først"
+        lands = time.time() + in_seconds - (self.armed_at.get(sound) or 0)
+        if lands < self.sequence_min:
+            return (f"kun {lands:.0f}s efter {required}, "
+                    f"kræver {self.sequence_min:.0f}s")
+        return None
+
+    def would_allow(self, sound, in_seconds=0):
         """Same check as allow, without side effects.
 
         Used the moment motion is seen, not when the sound would play. Without
         it, movement in a basket from before she was told off sat waiting, and
         cashed in the instant a nej armed the rule, which looked exactly like
-        praise for nothing.
+        praise for nothing. The minimum gap is checked here too, counted
+        forward to where the delayed sound would land.
         """
         with self.lock:
             if self._paused_locked():
                 return False, "pauset, ingen lyd"
-            required = self.sequence.get(sound)
-            if required and not self.armed.get(sound):
-                return False, f"venter på {required} først"
-            return True, None
+            note = self._sequence_note_locked(sound, in_seconds)
+            return (False, note) if note else (True, None)
 
-    def allow(self, sound=None):
+    def allow(self, sound=None, in_seconds=0):
         """Called for every trigger. Returns (allowed, note)."""
         with self.lock:
             if self._paused_locked():
                 return False, "pauset, ingen lyd"
-
-            # Not armed until the required sound has actually played, so a
-            # fresh start, or a restart, cannot open with a dygtig.
-            required = self.sequence.get(sound)
-            if required and not self.armed.get(sound):
-                return False, f"venter på {required} først"
-
+            note = self._sequence_note_locked(sound, in_seconds)
+            if note:
+                return False, note
         return True, None
 
     def _describe(self, snap):
@@ -509,12 +550,259 @@ class Guard:
             return self._snapshot_locked()
 
 
+def slug(text):
+    """File-name-safe version of a zone or sound name."""
+    plain = "".join(c if c.isalnum() else "-" for c in (text or "").lower())
+    return "-".join(part for part in plain.split("-") if part) or "x"
+
+
+def stream_name(url):
+    """The go2rtc stream a detector URL points at, e.g. mi360_det."""
+    path = urllib.parse.urlparse(url or "").path
+    return path.strip("/").split("/")[-1] or None
+
+
+def snapshot_stream(cam):
+    """The full resolution stream sitting next to the detector's substream.
+
+    Built by swapping the last path segment, so
+    rtsp://127.0.0.1:8554/mi360_det becomes rtsp://127.0.0.1:8554/mi360 and
+    nothing in the config on the Pi has to be touched.
+    """
+    if cam.get("snapshot_stream"):
+        return cam["snapshot_stream"]
+    src = cam.get("snapshot_src") or cam.get("src")
+    if not src or not cam.get("stream"):
+        return cam.get("stream")
+    parts = urllib.parse.urlsplit(cam["stream"])
+    base = parts.path.rsplit("/", 1)[0]
+    return urllib.parse.urlunsplit(parts._replace(path=f"{base}/{src}"))
+
+
+class FrameGrabber:
+    """Keeps the last few seconds of one camera as JPEGs in memory.
+
+    go2rtc can produce a JPEG on request, but it waits for the next keyframe of
+    an H265 stream, and measured on the Pi that put the picture two to three
+    seconds after the sound: long enough for her to have left the gate again.
+    Decoding continuously costs about a quarter of one core per camera, and the
+    picture is then already in hand the moment a sound fires.
+    """
+
+    SOI, EOI = b"\xff\xd8", b"\xff\xd9"
+    MAX_BUFFER = 8_000_000
+
+    def __init__(self, name, stream, fps=2, seconds=10, transport="tcp",
+                 quality=4):
+        self.name = name
+        self.stream = stream
+        self.fps = fps
+        self.transport = transport
+        self.quality = quality
+        self.frames = collections.deque(maxlen=max(2, int(fps * seconds)))
+        self.lock = threading.Lock()
+        self.stop = threading.Event()
+
+    def start(self):
+        threading.Thread(target=self._run, daemon=True,
+                         name=f"grab:{self.name}").start()
+        return self
+
+    def _run(self):
+        while not self.stop.is_set():
+            try:
+                self._read()
+            except Exception as exc:
+                if self.stop.is_set():
+                    return
+                print(f"[{self.name}] billedstream tabt: {exc} - nyt forsøg "
+                      f"om 5s", flush=True)
+            if not self.stop.is_set():
+                time.sleep(5)
+
+    def _read(self):
+        cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error",
+               "-rtsp_transport", self.transport, "-i", self.stream, "-an",
+               "-vf", f"fps={self.fps}", "-f", "image2pipe",
+               "-c:v", "mjpeg", "-q:v", str(self.quality), "-"]
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE)
+        buf = b""
+        try:
+            while not self.stop.is_set():
+                chunk = proc.stdout.read(65536)
+                if not chunk:
+                    err = proc.stderr.read().decode(errors="replace").strip()
+                    raise RuntimeError(err or "ffmpeg closed the stream")
+                buf += chunk
+                if len(buf) > self.MAX_BUFFER:
+                    raise RuntimeError("ingen billedgrænse i "
+                                       f"{len(buf)} bytes")
+                # One JPEG per frame down the pipe. Split on the end marker and
+                # keep the tail for the next read.
+                while True:
+                    end = buf.find(self.EOI)
+                    if end < 0:
+                        break
+                    frame, buf = buf[:end + 2], buf[end + 2:]
+                    start = frame.find(self.SOI)
+                    if start >= 0:
+                        with self.lock:
+                            self.frames.append((time.time(), frame[start:]))
+        finally:
+            proc.kill()
+            proc.wait()
+
+    def nearest(self, ts, max_age=None):
+        """The frame closest in time to ts, or None.
+
+        Nothing is returned if the closest frame is further away than one frame
+        interval plus a second. A stalled grabber would otherwise hand out a
+        picture from minutes ago as if it were the moment the sound fired, and
+        the whole point is that the picture can be trusted. The caller falls
+        back to asking go2rtc, which is late but honest about being current.
+        """
+        if max_age is None:
+            max_age = 1.0 / max(self.fps, 0.1) + 1.0
+        with self.lock:
+            if not self.frames:
+                return None
+            when, frame = min(self.frames, key=lambda f: abs(f[0] - ts))
+        return frame if abs(when - ts) <= max_age else None
+
+
+def snapshot_sources(cam):
+    """Streams to try for a picture, best quality first.
+
+    Full resolution is worth the try: 2304x1296 against the substream's
+    640x360, for about half a second more and four times the bytes. The
+    substream stays as the fallback, because it is the one ffmpeg already holds
+    open and it answers even if the camera refuses another session.
+    """
+    wanted = [cam.get("snapshot_src"), cam.get("src"),
+              stream_name(cam.get("stream"))]
+    out = []
+    for src in wanted:
+        if src and src not in out:
+            out.append(src)
+    return out
+
+
+class Snapshots:
+    """A JPEG of what the camera saw, every time a sound actually played.
+
+    The percentages in the log cannot answer whether she was really at the
+    gate, and that is the question a "nej" that looks wrong raises.
+    """
+
+    SAFE = re.compile(r"^\d{4}-\d{2}-\d{2}/[A-Za-z0-9_.-]+\.jpg$")
+    MAX_BYTES = 2_000_000
+
+    def __init__(self, root, base_url="http://127.0.0.1:1984", keep_days=90,
+                 enabled=True):
+        self.root = root
+        self.base = (base_url or "").rstrip("/")
+        self.keep_days = keep_days
+        self.enabled = bool(enabled and root and self.base)
+        self.last_pruned = None
+        if self.enabled:
+            try:
+                os.makedirs(root, exist_ok=True)
+            except OSError as exc:
+                print(f"kan ikke oprette billedmappen: {exc}", flush=True)
+                self.enabled = False
+
+    def capture(self, grabber, srcs, zone, sound, ts):
+        """Name the picture now, write it in the background.
+
+        The caller is the camera loop, where disk or network work stalls the
+        decode and drops frames. Handing back the name up front lets the event
+        carry it, and the browser asks for the file after it has landed.
+        """
+        if not self.enabled or not (grabber or srcs):
+            return None
+        when = time.localtime(ts)
+        stamp = time.strftime("%H%M%S", when) + f"{int(ts % 1 * 1000):03d}"
+        rel = (f"{time.strftime('%Y-%m-%d', when)}/"
+               f"{stamp}-{slug(zone)}-{slug(sound)}.jpg")
+        threading.Thread(target=self._save, args=(grabber, srcs, rel, ts),
+                         daemon=True, name="snapshot").start()
+        return rel
+
+    def _save(self, grabber, srcs, rel, ts):
+        """The buffered frame from the moment it fired. Only if the grabber has
+        nothing yet does go2rtc get asked to produce one."""
+        data = grabber.nearest(ts) if grabber else None
+        if data:
+            self._store(rel, data)
+            return
+        self._fetch(srcs, rel)
+
+    def _fetch(self, srcs, rel):
+        data = None
+        for src in srcs:
+            query = urllib.parse.urlencode({"src": src})
+            try:
+                with urllib.request.urlopen(
+                        f"{self.base}/api/frame.jpeg?{query}",
+                        timeout=8) as resp:
+                    data = resp.read(self.MAX_BYTES)
+            except (urllib.error.URLError, OSError, ValueError) as exc:
+                print(f"billede {rel} fra {src} fejlede: {exc}", flush=True)
+                continue
+            if data:
+                break
+            print(f"billede {rel} fra {src} kom tomt tilbage", flush=True)
+        if data:
+            self._store(rel, data)
+
+    def _store(self, rel, data):
+        path = os.path.join(self.root, rel)
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            tmp = path + ".tmp"
+            with open(tmp, "wb") as fh:
+                fh.write(data)
+            os.replace(tmp, path)
+        except OSError as exc:
+            print(f"kunne ikke gemme {rel}: {exc}", flush=True)
+            return
+        day = rel[:10]
+        if self.last_pruned != day:
+            self.last_pruned = day
+            self.prune()
+
+    def prune(self):
+        """One directory per day, so pictures expire together with their day."""
+        try:
+            days = sorted(d for d in os.listdir(self.root)
+                          if len(d) == 10 and d.replace("-", "").isdigit())
+        except OSError:
+            return
+        for old in days[:-self.keep_days] if len(days) > self.keep_days else []:
+            shutil.rmtree(os.path.join(self.root, old), ignore_errors=True)
+
+    def path(self, rel):
+        """Absolute path for a reference out of the log, or None.
+
+        The pattern is the whole defence against a request walking out of the
+        directory, so it has to stay strict.
+        """
+        if not self.enabled or not rel or not self.SAFE.match(rel):
+            return None
+        full = os.path.join(self.root, rel)
+        return full if os.path.isfile(full) else None
+
+
 class Zone:
-    def __init__(self, cfg, camera, bus, dry_run):
+    def __init__(self, cfg, camera, bus, dry_run, snap_srcs=(),
+                 grabber=None):
         self.name = cfg["name"]
         self.camera = camera
         self.bus = bus
         self.dry_run = dry_run
+        self.snap_srcs = list(snap_srcs)
+        self.grabber = grabber
 
         self.set_rect(cfg["rect"])
 
@@ -590,7 +878,9 @@ class Zone:
         if cooling or self.pending:
             return
 
-        ok, why = self.bus.guard.would_allow(self.sound)
+        # The delay is part of the question: the rule is about when the sound
+        # lands, not when the movement was seen.
+        ok, why = self.bus.guard.would_allow(self.sound, self.delay)
         if not ok:
             self.bus.publish({
                 "type": "blocked", "zone": self.name, "camera": self.camera,
@@ -633,13 +923,19 @@ class Zone:
             return
 
         self.last_fired = time.time()
+        # Ask for the picture before the Pushover call. That request can sit
+        # for seconds, and by then she has moved on.
+        snap = (self.bus.snapshots.capture(self.grabber, self.snap_srcs,
+                                           self.name, self.sound,
+                                           self.last_fired)
+                if self.bus.snapshots else None)
         self.bus.stats.trigger(self.sound)
         self.bus.guard.note_sound(self.sound)
         note = send_sound(self.bus.config, self.sound, "auto", self.dry_run)
         self.bus.publish({
             "type": "trigger", "zone": self.name, "camera": self.camera,
             "pct": round(pct, 2), "sound": self.sound,
-            "dry_run": self.dry_run, "note": note,
+            "dry_run": self.dry_run, "note": note, "snap": snap,
         })
         print(f"{time.strftime('%H:%M:%S')}  {self.name}  {pct:.1f}%  "
               f"-> {self.sound}  {note}", flush=True)
@@ -768,10 +1064,12 @@ def ffmpeg_frames(stream, fps, transport):
         proc.wait()
 
 
-def watch(cam, fps, transport, tune, dry_run, bus, stop):
+def watch(cam, fps, transport, tune, dry_run, bus, stop, grabber=None):
     """Run one camera. Reconnects on failure so a blip does not end the run."""
     name = cam.get("name", "cam")
-    zones = [Zone(z, name, bus, dry_run) for z in cam["zones"]]
+    snap_srcs = snapshot_sources(cam)
+    zones = [Zone(z, name, bus, dry_run, snap_srcs, grabber)
+             for z in cam["zones"]]
     bus.zones.extend(zones)
     while not stop.is_set():
         prev = None
@@ -901,10 +1199,31 @@ def make_handler(bus, cfg, auth, args_config):
             elif path == "/history":
                 q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
                 day = (q.get("day") or [time.strftime("%Y-%m-%d")])[0]
+                only = (q.get("only") or [""])[0] or None
                 self._send(
-                    json.dumps({"day": day, "events": bus.read_day(day)},
+                    json.dumps({"day": day, "only": only,
+                                "events": bus.read_day(day, only=only)},
                                ensure_ascii=False).encode(),
                     "application/json; charset=utf-8")
+            elif path == "/snap":
+                q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                full = (bus.snapshots.path((q.get("f") or [""])[0])
+                        if bus.snapshots else None)
+                if not full:
+                    self.send_error(404)
+                    return
+                try:
+                    with open(full, "rb") as fh:
+                        body = fh.read()
+                except OSError:
+                    self.send_error(404)
+                    return
+                # The file never changes once written, so let the browser keep
+                # it: scrolling back through a day is otherwise a fresh
+                # download per picture.
+                self._send(body, "image/jpeg",
+                           headers=[("Cache-Control",
+                                     "max-age=31536000, immutable")])
             elif path == "/events":
                 self.stream_events()
             else:
@@ -1110,9 +1429,18 @@ def main():
     cfg["_dry_run"] = args.dry_run
     bus = EventBus(log_dir=os.path.join(HERE, "log"),
                    keep_days=cfg.get("keep_days", 90))
-    bus.stats.rebuild(bus.read_day(time.strftime("%Y-%m-%d")))
+    # The whole day, not the capped page view: a restart on a busy day used to
+    # rebuild the counters from the last few thousand detections alone and lose
+    # every sound played before that.
+    bus.stats.rebuild(bus.read_day(time.strftime("%Y-%m-%d"), limit=None))
     bus.config = cfg
     bus.guard = Guard(os.path.join(HERE, "pause.json"), bus, cfg)
+    snaps = cfg.get("snapshots") or {}
+    bus.snapshots = Snapshots(
+        root=snaps.get("dir") or os.path.join(HERE, "snapshots"),
+        base_url=snaps.get("go2rtc_api") or "http://127.0.0.1:1984",
+        keep_days=snaps.get("keep_days", cfg.get("keep_days", 90)),
+        enabled=snaps.get("enabled", True))
     fps = cfg.get("fps", 5)
 
     if bus.guard.is_paused():
@@ -1120,6 +1448,11 @@ def main():
     transport = cfg.get("rtsp_transport", "tcp")
     stop = threading.Event()
 
+    for dependent, required in (bus.guard.sequence or {}).items():
+        print(f"{dependent} kræver {required} først, og mindst "
+              f"{bus.guard.sequence_min}s efter den", flush=True)
+
+    live_snaps = bus.snapshots.enabled and snaps.get("live", True)
     for cam in cfg["cameras"]:
         for z in cam["zones"]:
             print(f"{cam.get('name')}/{z['name']}: >="
@@ -1127,9 +1460,19 @@ def main():
                   f"{z.get('consecutive', 2)} frames, "
                   f"delay {z.get('delay', 0)}s, "
                   f"cooldown {z.get('cooldown', 60)}s", flush=True)
+        grabber = None
+        if live_snaps:
+            grabber = FrameGrabber(
+                cam.get("name", "cam"), snapshot_stream(cam),
+                fps=snaps.get("fps", 2),
+                seconds=snaps.get("buffer_seconds", 10),
+                transport=transport, quality=snaps.get("quality", 4)).start()
+            print(f"{cam.get('name')}: billeder fra {grabber.stream} "
+                  f"({grabber.fps} fps i hukommelsen)", flush=True)
         threading.Thread(
             target=watch,
-            args=(cam, fps, transport, args.tune, args.dry_run, bus, stop),
+            args=(cam, fps, transport, args.tune, args.dry_run, bus, stop,
+                  grabber),
             daemon=True).start()
 
     server = ThreadingHTTPServer((args.bind, args.port),
