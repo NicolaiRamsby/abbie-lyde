@@ -285,7 +285,16 @@
     border-radius: 12px; width: 100%; max-width: 900px;
     box-shadow: 0 20px 60px rgba(0,0,0,.6);
   }
-  .sheet > h2 { flex: 0 0 auto; border-radius: 12px 12px 0 0; }
+  /* Spelled out rather than borrowed from .card h2: the sheet is not a card,
+     so it was getting the browser's default h2 with no padding at all. */
+  .sheet > h2 {
+    flex: 0 0 auto; margin: 0;
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; font-size: 14px; font-weight: 600;
+    /* 12px so the title lines up with the left edge of the pictures below. */
+    padding: 11px 12px; border-bottom: 1px solid var(--line);
+    border-radius: 12px 12px 0 0;
+  }
   .shots {
     display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
     gap: 12px; padding: 12px; overflow-y: auto; min-height: 0;
