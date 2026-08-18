@@ -48,15 +48,71 @@ Bevidste valg. Lav dem ikke om uden at spørge Nicolai.
   teststreams i `go2rtc.yaml` får alt til at time out.
 - Detektion kører på substreams, ikke fuld opløsning: 2,4 % CPU mod 14,6 %.
 
+## Adgang
+
+Tre veje ind, prøv i denne rækkefølge. `deploy.sh` gør det automatisk.
+
+| Vej | Kommando | Virker |
+|---|---|---|
+| Tailscale | `ssh nicolai@abbie` | de fleste netværk |
+| Tailscale-IP | `ssh nicolai@100.91.217.86` | hvis navneopslag driller |
+| LAN | `ssh nicolai@192.168.86.44` | kun hjemme |
+
+Ting der har spærret vejen før, i den rækkefølge de er værd at tjekke:
+
+1. **Tailscale står på "stopped".** Start den: `/Applications/Tailscale.app/Contents/MacOS/Tailscale up`
+2. **Et LAN-kabel sidder i.** Fortinet-udstyret på Nicolais arbejdsnet blokerer
+   Tailscale, og et USB-dock på ethernet får forrang over WiFi. Træk kablet ud,
+   så ryger trafikken over WiFi eller hotspot.
+3. **SSH-nøglen har en adgangssætning** og ligger ikke altid i ssh-agent. Over
+   Tailscale er det uden betydning, for Tailscale SSH bruger tailnet-identitet.
+   Til LAN-vejen: `ssh-add --apple-use-keychain ~/.ssh/id_ed25519`
+4. **Pi'en er selv nede.** `curl -s -o /dev/null -w '%{http_code}' https://abbie.deveo.dk/login`
+   giver 530 hvis Cloudflare ikke kan nå den. Så hjælper ingen SSH-vej.
+
+### Læs data uden SSH
+
+Tunnelen virker på netværk hvor Tailscale ikke gør, og giver adgang til loggen:
+
+```bash
+J=$(mktemp)
+curl -s -c "$J" -o /dev/null -X POST -d "code=DIN_KODE" https://abbie.deveo.dk/login
+curl -s -b "$J" "https://abbie.deveo.dk/history?day=$(date +%F)" | python3 -m json.tool
+curl -s -b "$J" https://abbie.deveo.dk/state
+```
+
+Endpoints: `/state`, `/history?day=`, `/days`, `/config`, `/events` (SSE).
+
 ## Deploy
 
 ```bash
-scp pi/abbie.py pi/index.html nicolai@abbie:~/abbie-deploy/
-ssh nicolai@abbie '
-  sudo install -o nicolai -g nicolai -m 0755 ~/abbie-deploy/abbie.py  /opt/abbie/abbie.py
-  sudo install -o nicolai -g nicolai -m 0644 ~/abbie-deploy/index.html /opt/abbie/index.html
-  sudo systemctl restart abbie'
+./pi/deploy.sh                 # abbie.py og index.html
+./pi/deploy.sh index.html      # kun én fil
 ```
 
+Scriptet finder selv en åben vej ind, lægger filerne på plads, genstarter
+tjenesten og verificerer med checksum at det der ligger på Pi'en er det du
+sendte. Fejler noget, printer den de sidste linjer fra tjenestens log.
+
 Push **aldrig** `config.json` fra en lokal kopi: zoner redigeres i browseren og
-skrives direkte på Pi'en, så en blind overskrivning smider dem væk.
+skrives direkte på Pi'en, så en blind overskrivning smider dem væk. Skal en
+indstilling ændres, så ret den på Pi'en:
+
+```bash
+ssh nicolai@abbie 'sudo nano /opt/abbie/config.json && sudo systemctl restart abbie'
+```
+
+## Når noget går galt
+
+Systemloggen ligger på disk (maks 60 MB), så den overlever en genstart:
+
+```bash
+ssh nicolai@abbie 'journalctl -u abbie -n 50 --no-pager'
+ssh nicolai@abbie 'journalctl --list-boots'          # nedbrud ses som manglende afslutning
+ssh nicolai@abbie 'journalctl -b -1 -p err --no-pager'   # fejl i forrige opstart
+ssh nicolai@abbie 'vcgencmd get_throttled'           # 0x0 = ingen strømproblemer
+```
+
+18. august 2026 svarede Pi'en på ARP, men hverken ping eller nogen port. Efter
+en strømafbrydelse kom den op igen, filsystemet var rent, og årsagen blev aldrig
+fundet: systemloggen lå dengang i RAM og forsvandt. Derfor ligger den nu på disk.
